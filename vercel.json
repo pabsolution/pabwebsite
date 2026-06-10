@@ -1,13 +1,11 @@
 {
   "version": 2,
   "buildCommand": "pnpm build",
-  "installCommand": "pnpm install",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/node"
-    }
-  ],
+  "installCommand": "pnpm install --no-frozen-lockfile",
+  "env": {
+    "PNPM_HOME": "/pnpm",
+    "PATH": "$PNPM_HOME:$PATH"
+  },
   "routes": [
     {
       "src": "/api/(.*)",
