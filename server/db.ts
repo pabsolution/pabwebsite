@@ -114,10 +114,18 @@ export async function createContactSubmission(data: InsertContactSubmission): Pr
     };
     
     const result = await db.insert(contactSubmissions).values(insertData);
-    const id = (result as any).insertId;
+    
+    let id: number | undefined;
+    if (result && typeof result === 'object') {
+      id = (result as any).insertId || (result as any)[0]?.insertId;
+    }
     
     if (!id) {
-      console.error("[Database] No insertId returned from contact submission insert");
+      const recent = await db.select().from(contactSubmissions).orderBy(desc(contactSubmissions.createdAt)).limit(1);
+      if (recent.length > 0) {
+        return recent[0];
+      }
+      console.error("[Database] Failed to retrieve inserted contact submission");
       return null;
     }
     
