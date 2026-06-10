@@ -1,15 +1,21 @@
 import nodemailer from 'nodemailer';
+import { createConnection } from 'net';
 
 // Configuration for email delivery
-// These should be set in Vercel environment variables
+// These should be set in Render/Vercel environment variables
 const SMTP_CONFIG = {
   host: process.env.SMTP_HOST || '',
   port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  secure: false, // Office 365 uses STARTTLS (port 587), not TLS (port 465)
   auth: {
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
   },
+  tls: {
+    ciphers: 'SSLv3',
+    rejectUnauthorized: false, // Required for some corporate email servers
+  },
+  family: 4, // Force IPv4 to avoid ENETUNREACH errors on cloud hosting
 };
 
 const FROM_EMAIL = process.env.SMTP_FROM || SMTP_CONFIG.auth.user;
@@ -27,8 +33,16 @@ export async function sendContactEmail(data: {
   // If SMTP is not configured, log and return
   if (!SMTP_CONFIG.host || !SMTP_CONFIG.auth.user || !SMTP_CONFIG.auth.pass) {
     console.warn('[Email] SMTP is not configured. Submission saved to DB but email not sent.');
+    console.warn('[Email] Expected env vars: SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT');
     return false;
   }
+
+  console.log('[Email] Attempting to send email...');
+  console.log('[Email] From:', FROM_EMAIL);
+  console.log('[Email] To:', TO_EMAIL);
+  console.log('[Email] SMTP Host:', SMTP_CONFIG.host);
+  console.log('[Email] SMTP Port:', SMTP_CONFIG.port);
+  console.log('[Email] Using IPv4 (family: 4)');
 
   const transporter = nodemailer.createTransport(SMTP_CONFIG);
 
@@ -66,11 +80,21 @@ ${data.projectDetails || 'No details provided'}
   };
 
   try {
+    console.log('[Email] Verifying SMTP connection...');
+    await transporter.verify();
+    console.log('[Email] SMTP connection verified successfully');
+
+    console.log('[Email] Sending email...');
     const info = await transporter.sendMail(mailOptions);
-    console.log('[Email] Message sent: %s', info.messageId);
+    console.log('[Email] Message sent successfully: %s', info.messageId);
+    console.log('[Email] Response:', info.response);
     return true;
   } catch (error) {
     console.error('[Email] Error sending email:', error);
+    if (error instanceof Error) {
+      console.error('[Email] Error message:', error.message);
+      console.error('[Email] Error code:', (error as any).code);
+    }
     return false;
   }
 }
