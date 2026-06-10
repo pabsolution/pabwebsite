@@ -1,4 +1,3 @@
-import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router, protectedProcedure } from "./_core/trpc";
@@ -6,6 +5,7 @@ import { createContactSubmission, getContactSubmissions, updateContactSubmission
 import { z } from "zod";
 import { notifyOwner } from "./_core/notification";
 import { sendContactEmail } from "./email";
+import { COOKIE_NAME } from "@shared/const";
 
 export const appRouter = router({
   system: systemRouter,
