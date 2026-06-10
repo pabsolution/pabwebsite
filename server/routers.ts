@@ -37,21 +37,19 @@ export const appRouter = router({
           projectDetails: input.projectDetails || null,
         });
         
-        // Send notification to owner when new submission arrives
+        // Send email in the background (don't wait for it)
         if (submission) {
-          try {
-            // Send via Email (SMTP)
-            await sendContactEmail({
-              name: input.name,
-              email: input.email,
-              company: input.company,
-              projectDetails: input.projectDetails,
-            });
-          } catch (error) {
+          sendContactEmail({
+            name: input.name,
+            email: input.email,
+            company: input.company,
+            projectDetails: input.projectDetails,
+          }).catch(error => {
             console.error('Failed to send email notification:', error);
-          }
+          });
         }
         
+        // Return success immediately after database save
         return { success: !!submission, id: submission?.id };
       }),
     
