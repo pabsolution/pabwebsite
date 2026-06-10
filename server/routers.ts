@@ -3,7 +3,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router, protectedProcedure } from "./_core/trpc";
 import { createContactSubmission, getContactSubmissions, updateContactSubmissionStatus, getServices, getProjects, createProject, updateProject } from "./db";
 import { z } from "zod";
-import { notifyOwner } from "./_core/notification";
+
 import { sendContactEmail } from "./email";
 import { COOKIE_NAME } from "@shared/const";
 
@@ -40,13 +40,7 @@ export const appRouter = router({
         // Send notification to owner when new submission arrives
         if (submission) {
           try {
-            // 1. Send via Manus Notification (In-App)
-            await notifyOwner({
-              title: `New Contact Form Submission from ${input.name}`,
-              content: `Email: ${input.email}\nCompany: ${input.company || 'N/A'}\n\nProject Details:\n${input.projectDetails || 'No details provided'}`,
-            });
-
-            // 2. Send via Email (SMTP)
+            // Send via Email (SMTP)
             await sendContactEmail({
               name: input.name,
               email: input.email,
@@ -54,7 +48,7 @@ export const appRouter = router({
               projectDetails: input.projectDetails,
             });
           } catch (error) {
-            console.error('Failed to send notification:', error);
+            console.error('Failed to send email notification:', error);
           }
         }
         
