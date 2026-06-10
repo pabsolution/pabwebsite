@@ -1,5 +1,4 @@
 import nodemailer from 'nodemailer';
-import { createConnection } from 'net';
 
 // Configuration for email delivery
 // These should be set in Render/Vercel environment variables
@@ -12,10 +11,11 @@ const SMTP_CONFIG = {
     pass: process.env.SMTP_PASS || '',
   },
   tls: {
-    ciphers: 'SSLv3',
     rejectUnauthorized: false, // Required for some corporate email servers
   },
   family: 4, // Force IPv4 to avoid ENETUNREACH errors on cloud hosting
+  connectionTimeout: 10000, // 10 seconds to establish connection
+  socketTimeout: 10000, // 10 seconds for socket operations
 };
 
 const FROM_EMAIL = process.env.SMTP_FROM || SMTP_CONFIG.auth.user;
@@ -43,6 +43,7 @@ export async function sendContactEmail(data: {
   console.log('[Email] SMTP Host:', SMTP_CONFIG.host);
   console.log('[Email] SMTP Port:', SMTP_CONFIG.port);
   console.log('[Email] Using IPv4 (family: 4)');
+  console.log('[Email] Connection timeout: 10 seconds');
 
   const transporter = nodemailer.createTransport(SMTP_CONFIG);
 
@@ -81,7 +82,14 @@ ${data.projectDetails || 'No details provided'}
 
   try {
     console.log('[Email] Verifying SMTP connection...');
-    await transporter.verify();
+    
+    // Set a timeout for the verify operation
+    const verifyPromise = transporter.verify();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('SMTP verification timeout after 10 seconds')), 10000)
+    );
+    
+    await Promise.race([verifyPromise, timeoutPromise]);
     console.log('[Email] SMTP connection verified successfully');
 
     console.log('[Email] Sending email...');
@@ -94,6 +102,15 @@ ${data.projectDetails || 'No details provided'}
     if (error instanceof Error) {
       console.error('[Email] Error message:', error.message);
       console.error('[Email] Error code:', (error as any).code);
+      
+      // Provide helpful hints based on error type
+      if (error.message.includes('timeout')) {
+        console.error('[Email] Hint: Connection timeout. Check if SMTP_HOST and SMTP_PORT are correct.');
+      } else if (error.message.includes('EAUTH')) {
+        console.error('[Email] Hint: Authentication failed. Check if SMTP_USER and SMTP_PASS are correct.');
+      } else if (error.message.includes('ENETUNREACH')) {
+        console.error('[Email] Hint: Network unreachable. Your hosting provider may block outbound SMTP.');
+      }
     }
     return false;
   }
