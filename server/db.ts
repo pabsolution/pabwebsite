@@ -9,7 +9,15 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      let connectionUrl = process.env.DATABASE_URL;
+      
+      if (connectionUrl && !connectionUrl.includes('ssl=')) {
+        const separator = connectionUrl.includes('?') ? '&' : '?';
+        connectionUrl = `${connectionUrl}${separator}ssl={"rejectUnauthorized":true}`;
+      }
+      
+      _db = drizzle(connectionUrl);
+      console.log("[Database] Connected successfully");
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -98,13 +106,26 @@ export async function createContactSubmission(data: InsertContactSubmission): Pr
   }
 
   try {
-    const result = await db.insert(contactSubmissions).values(data);
+    const now = new Date();
+    const insertData = {
+      ...data,
+      createdAt: data.createdAt || now,
+      updatedAt: data.updatedAt || now,
+    };
+    
+    const result = await db.insert(contactSubmissions).values(insertData);
     const id = (result as any).insertId;
+    
+    if (!id) {
+      console.error("[Database] No insertId returned from contact submission insert");
+      return null;
+    }
+    
     const submission = await db.select().from(contactSubmissions).where(eq(contactSubmissions.id, id)).limit(1);
     return submission.length > 0 ? submission[0] : null;
   } catch (error) {
     console.error("[Database] Failed to create contact submission:", error);
-    throw error;
+    return null;
   }
 }
 
