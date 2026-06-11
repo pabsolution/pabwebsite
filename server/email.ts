@@ -1,13 +1,9 @@
-import nodemailer from 'nodemailer';
+/**
+ * Email delivery using Resend API (direct HTTPS, no dependencies)
+ * Falls back to SMTP if Resend is not configured
+ */
 
-// Try to import Resend if available
-let Resend: any;
-try {
-  const resendModule = await import('resend');
-  Resend = resendModule.Resend;
-} catch (e) {
-  console.log('[Email] Resend not installed, will use SMTP fallback');
-}
+import nodemailer from 'nodemailer';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
@@ -18,7 +14,7 @@ const FROM_EMAIL = process.env.SMTP_FROM || SMTP_USER || 'noreply@pabsolutions.c
 const TO_EMAIL = process.env.SMTP_TO || 'hello-pabsolutions@outlook.com';
 
 /**
- * Sends an email using Resend API (preferred) or SMTP fallback
+ * Send email via Resend API (preferred) or SMTP fallback
  */
 export async function sendContactEmail(data: {
   name: string;
@@ -57,37 +53,74 @@ ${data.projectDetails || 'No details provided'}
     `,
   };
 
-  // Try Resend first (preferred method for cloud hosting)
-  if (RESEND_API_KEY && Resend) {
+  // Try Resend first (using direct HTTPS API call)
+  if (RESEND_API_KEY) {
     try {
       console.log('[Email] Attempting to send via Resend API...');
-      const resend = new Resend(RESEND_API_KEY);
-      const result = await resend.emails.send({
-        from: FROM_EMAIL,
-        to: TO_EMAIL,
-        subject: emailContent.subject,
-        html: emailContent.html,
-        replyTo: data.email,
-      });
-
-      if (result.error) {
-        console.error('[Email] Resend API error:', result.error);
-        console.log('[Email] Falling back to SMTP...');
-        return await sendViaSMTP(emailContent, data.email);
+      const success = await sendViaResend(emailContent, data.email);
+      if (success) {
+        return true;
       }
-
-      console.log('[Email] Message sent successfully via Resend: %s', result.data?.id);
-      return true;
+      console.log('[Email] Resend failed, falling back to SMTP...');
     } catch (error) {
       console.error('[Email] Resend error:', error);
       console.log('[Email] Falling back to SMTP...');
-      return await sendViaSMTP(emailContent, data.email);
     }
   }
 
   // Fallback to SMTP
-  console.log('[Email] Using SMTP fallback...');
-  return await sendViaSMTP(emailContent, data.email);
+  if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+    console.log('[Email] Using SMTP fallback...');
+    return await sendViaSMTP(emailContent, data.email);
+  }
+
+  console.warn('[Email] No email service configured.');
+  console.warn('[Email] To use Resend: Set RESEND_API_KEY environment variable');
+  console.warn('[Email] To use SMTP: Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT');
+  return false;
+}
+
+/**
+ * Send email via Resend using direct HTTPS API call (no dependencies)
+ */
+async function sendViaResend(
+  emailContent: { subject: string; text: string; html: string },
+  replyTo: string
+): Promise<boolean> {
+  try {
+    console.log('[Email] Verifying Resend API key...');
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: FROM_EMAIL,
+        to: TO_EMAIL,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        reply_to: replyTo,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('[Email] Resend API error:', error);
+      return false;
+    }
+
+    const result = await response.json();
+    console.log('[Email] Message sent successfully via Resend: %s', result.id);
+    return true;
+  } catch (error) {
+    console.error('[Email] Resend fetch error:', error);
+    if (error instanceof Error) {
+      console.error('[Email] Error message:', error.message);
+    }
+    return false;
+  }
 }
 
 /**
@@ -96,14 +129,7 @@ ${data.projectDetails || 'No details provided'}
 async function sendViaSMTP(
   emailContent: { subject: string; text: string; html: string },
   replyTo: string
-) {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
-    console.warn('[Email] Neither Resend nor SMTP is configured. Email not sent.');
-    console.warn('[Email] To use Resend: Set RESEND_API_KEY environment variable');
-    console.warn('[Email] To use SMTP: Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT');
-    return false;
-  }
-
+): Promise<boolean> {
   try {
     console.log('[Email] Attempting to send via SMTP...');
     console.log('[Email] SMTP Host:', SMTP_HOST);
@@ -147,8 +173,8 @@ async function sendViaSMTP(
       console.error('[Email] Error message:', error.message);
       console.error('[Email] Error code:', (error as any).code);
 
-      if (error.message.includes('timeout')) {
-        console.error('[Email] Hint: Connection timeout. Render may block SMTP port 587.');
+      if (error.message.includes('timeout') || error.message.includes('ENETUNREACH')) {
+        console.error('[Email] Hint: Render blocks SMTP port 587.');
         console.error('[Email] Solution: Use Resend API instead (set RESEND_API_KEY)');
       }
     }
