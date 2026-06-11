@@ -1,28 +1,24 @@
 import nodemailer from 'nodemailer';
 
-// Configuration for email delivery
-// These should be set in Render/Vercel environment variables
-const SMTP_CONFIG = {
-  host: process.env.SMTP_HOST || '',
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false, // Office 365 uses STARTTLS (port 587), not TLS (port 465)
-  auth: {
-    user: process.env.SMTP_USER || '',
-    pass: process.env.SMTP_PASS || '',
-  },
-  tls: {
-    rejectUnauthorized: false, // Required for some corporate email servers
-  },
-  family: 4, // Force IPv4 to avoid ENETUNREACH errors on cloud hosting
-  connectionTimeout: 10000, // 10 seconds to establish connection
-  socketTimeout: 10000, // 10 seconds for socket operations
-};
+// Try to import Resend if available
+let Resend: any;
+try {
+  const resendModule = await import('resend');
+  Resend = resendModule.Resend;
+} catch (e) {
+  console.log('[Email] Resend not installed, will use SMTP fallback');
+}
 
-const FROM_EMAIL = process.env.SMTP_FROM || SMTP_CONFIG.auth.user;
-const TO_EMAIL = process.env.SMTP_TO || 'pabsolutions@outlook.com';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const FROM_EMAIL = process.env.SMTP_FROM || SMTP_USER || 'noreply@pabsolutions.com';
+const TO_EMAIL = process.env.SMTP_TO || 'hello-pabsolutions@outlook.com';
 
 /**
- * Sends an email notification for a new contact form submission.
+ * Sends an email using Resend API (preferred) or SMTP fallback
  */
 export async function sendContactEmail(data: {
   name: string;
@@ -30,26 +26,7 @@ export async function sendContactEmail(data: {
   company?: string | null;
   projectDetails?: string | null;
 }) {
-  // If SMTP is not configured, log and return
-  if (!SMTP_CONFIG.host || !SMTP_CONFIG.auth.user || !SMTP_CONFIG.auth.pass) {
-    console.warn('[Email] SMTP is not configured. Submission saved to DB but email not sent.');
-    console.warn('[Email] Expected env vars: SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT');
-    return false;
-  }
-
-  console.log('[Email] Attempting to send email...');
-  console.log('[Email] From:', FROM_EMAIL);
-  console.log('[Email] To:', TO_EMAIL);
-  console.log('[Email] SMTP Host:', SMTP_CONFIG.host);
-  console.log('[Email] SMTP Port:', SMTP_CONFIG.port);
-  console.log('[Email] Using IPv4 (family: 4)');
-  console.log('[Email] Connection timeout: 10 seconds');
-
-  const transporter = nodemailer.createTransport(SMTP_CONFIG);
-
-  const mailOptions = {
-    from: `"PAB Website" <${FROM_EMAIL}>`,
-    to: TO_EMAIL,
+  const emailContent = {
     subject: `New Project Inquiry from ${data.name}`,
     text: `
 New Contact Form Submission
@@ -80,36 +57,99 @@ ${data.projectDetails || 'No details provided'}
     `,
   };
 
+  // Try Resend first (preferred method for cloud hosting)
+  if (RESEND_API_KEY && Resend) {
+    try {
+      console.log('[Email] Attempting to send via Resend API...');
+      const resend = new Resend(RESEND_API_KEY);
+      const result = await resend.emails.send({
+        from: FROM_EMAIL,
+        to: TO_EMAIL,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        replyTo: data.email,
+      });
+
+      if (result.error) {
+        console.error('[Email] Resend API error:', result.error);
+        console.log('[Email] Falling back to SMTP...');
+        return await sendViaSMTP(emailContent, data.email);
+      }
+
+      console.log('[Email] Message sent successfully via Resend: %s', result.data?.id);
+      return true;
+    } catch (error) {
+      console.error('[Email] Resend error:', error);
+      console.log('[Email] Falling back to SMTP...');
+      return await sendViaSMTP(emailContent, data.email);
+    }
+  }
+
+  // Fallback to SMTP
+  console.log('[Email] Using SMTP fallback...');
+  return await sendViaSMTP(emailContent, data.email);
+}
+
+/**
+ * Fallback SMTP email sending
+ */
+async function sendViaSMTP(
+  emailContent: { subject: string; text: string; html: string },
+  replyTo: string
+) {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    console.warn('[Email] Neither Resend nor SMTP is configured. Email not sent.');
+    console.warn('[Email] To use Resend: Set RESEND_API_KEY environment variable');
+    console.warn('[Email] To use SMTP: Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT');
+    return false;
+  }
+
   try {
+    console.log('[Email] Attempting to send via SMTP...');
+    console.log('[Email] SMTP Host:', SMTP_HOST);
+    console.log('[Email] SMTP Port:', SMTP_PORT);
+
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: false,
+      auth: {
+        user: SMTP_USER,
+        pass: SMTP_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+      family: 4, // Force IPv4
+      connectionTimeout: 5000,
+      socketTimeout: 5000,
+    });
+
     console.log('[Email] Verifying SMTP connection...');
-    
-    // Set a timeout for the verify operation
-    const verifyPromise = transporter.verify();
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('SMTP verification timeout after 10 seconds')), 10000)
-    );
-    
-    await Promise.race([verifyPromise, timeoutPromise]);
-    console.log('[Email] SMTP connection verified successfully');
+    await transporter.verify();
+    console.log('[Email] SMTP connection verified');
 
     console.log('[Email] Sending email...');
-    const info = await transporter.sendMail(mailOptions);
-    console.log('[Email] Message sent successfully: %s', info.messageId);
-    console.log('[Email] Response:', info.response);
+    const info = await transporter.sendMail({
+      from: `"PAB Website" <${FROM_EMAIL}>`,
+      to: TO_EMAIL,
+      replyTo: replyTo,
+      subject: emailContent.subject,
+      text: emailContent.text,
+      html: emailContent.html,
+    });
+
+    console.log('[Email] Message sent successfully via SMTP: %s', info.messageId);
     return true;
   } catch (error) {
-    console.error('[Email] Error sending email:', error);
+    console.error('[Email] SMTP error:', error);
     if (error instanceof Error) {
       console.error('[Email] Error message:', error.message);
       console.error('[Email] Error code:', (error as any).code);
-      
-      // Provide helpful hints based on error type
+
       if (error.message.includes('timeout')) {
-        console.error('[Email] Hint: Connection timeout. Check if SMTP_HOST and SMTP_PORT are correct.');
-      } else if (error.message.includes('EAUTH')) {
-        console.error('[Email] Hint: Authentication failed. Check if SMTP_USER and SMTP_PASS are correct.');
-      } else if (error.message.includes('ENETUNREACH')) {
-        console.error('[Email] Hint: Network unreachable. Your hosting provider may block outbound SMTP.');
+        console.error('[Email] Hint: Connection timeout. Render may block SMTP port 587.');
+        console.error('[Email] Solution: Use Resend API instead (set RESEND_API_KEY)');
       }
     }
     return false;
